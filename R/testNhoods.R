@@ -105,7 +105,7 @@ NULL
 testNhoods <- function(x, design, design.df,
                        fdr.weighting=c("k-distance", "neighbour-distance", "max", "graph-overlap", "none"),
                        min.mean=0, model.contrasts=NULL, robust=TRUE, reduced.dim="PCA",
-                       norm.method=c("TMM", "RLE", "logMS")){
+                       norm.method=c("TMM", "RLE", "logMS"), subset.counts=FALSE, graph_name='miloR'){
     if(is(design, "formula")){
         model <- model.matrix(design, data=design.df)
         rownames(model) <- rownames(design.df)
@@ -126,83 +126,142 @@ testNhoods <- function(x, design, design.df,
             }
         }
     }
-
-    if(!is(x, "Milo")){
-        stop("Unrecognised input type - must be of class Milo")
-    } else if(.check_empty(x, "nhoodCounts")){
-        stop("Neighbourhood counts missing - please run countCells first")
-    }
-
+  
     if(!any(norm.method %in% c("TMM", "logMS", "RLE"))){
-        stop("Normalisation method ", norm.method, " not recognised. Must be either TMM, RLE or logMS")
+      stop("Normalisation method ", norm.method, " not recognised. Must be either TMM, RLE or logMS")
     }
-
-    if(!reduced.dim %in% reducedDimNames(x)){
+    # stop("Unrecognised input type - must be of class Milo or class Seurat")
+    if(is(x, "Milo")){
+      if(.check_empty(x, "nhoodCounts")){
+        stop("Neighbourhood counts missing - please run countCells first")
+      }
+      
+      if(!reduced.dim %in% reducedDimNames(x)){
         stop(reduced.dim, " is not found in reducedDimNames. Avaiable options are ", paste(reducedDimNames(x), collapse=","))
-    }
-
-    subset.counts <- FALSE
-    if(ncol(nhoodCounts(x)) != nrow(model)){
+      }
+      
+      if(ncol(nhoodCounts(x)) != nrow(model)){
         # need to allow for design.df with a subset of samples only
         if(all(rownames(model) %in% colnames(nhoodCounts(x)))){
-            message("Design matrix is a strict subset of the nhood counts")
-            subset.counts <- TRUE
+          message("Design matrix is a strict subset of the nhood counts")
+          subset.counts <- TRUE
         } else{
-            stop("Design matrix (", nrow(model), ") and nhood counts (",
-                 ncol(nhoodCounts(x)), ") are not the same dimension")
+          stop("Design matrix (", nrow(model), ") and nhood counts (",
+               ncol(nhoodCounts(x)), ") are not the same dimension")
         }
-    }
-
-    # assume nhoodCounts and model are in the same order
-    # cast as DGEList doesn't accept sparse matrices
-    # what is the cost of cast a matrix that is already dense vs. testing it's class
-    if(min.mean > 0){
+      }
+      # assume nhoodCounts and model are in the same order
+      # cast as DGEList doesn't accept sparse matrices
+      # what is the cost of cast a matrix that is already dense vs. testing it's class
+      if(min.mean > 0){
         if(isTRUE(subset.counts)){
-            keep.nh <- rowMeans(nhoodCounts(x)[, rownames(model)]) >= min.mean
+          keep.nh <- rowMeans(nhoodCounts(x)[, rownames(model)]) >= min.mean
         } else{
-            keep.nh <- rowMeans(nhoodCounts(x)) >= min.mean
+          keep.nh <- rowMeans(nhoodCounts(x)) >= min.mean
         }
-    } else{
+      } else{
         if(isTRUE(subset.counts)){
-            keep.nh <- rep(TRUE, nrow(nhoodCounts(x)[, rownames(model)]))
+          keep.nh <- rep(TRUE, nrow(nhoodCounts(x)[, rownames(model)]))
         }else{
-            keep.nh <- rep(TRUE, nrow(nhoodCounts(x)))
+          keep.nh <- rep(TRUE, nrow(nhoodCounts(x)))
         }
-    }
-
-    if(isTRUE(subset.counts)){
+      }
+      if(isTRUE(subset.counts)){
         keep.samps <- intersect(rownames(model), colnames(nhoodCounts(x)[keep.nh, ]))
-    } else{
+      } else{
         keep.samps <- colnames(nhoodCounts(x)[keep.nh, ])
-    }
-
-    if(any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) != rownames(model)) & !any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) %in% rownames(model))){
+      }
+      if(any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) != rownames(model)) & !any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) %in% rownames(model))){
         stop("Sample names in design matrix and nhood counts are not matched.
              Set appropriate rownames in design matrix.")
-    } else if(any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) != rownames(model)) & any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) %in% rownames(model))){
+      } else if(any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) != rownames(model)) & any(colnames(nhoodCounts(x)[keep.nh, keep.samps]) %in% rownames(model))){
         warning("Sample names in design matrix and nhood counts are not matched. Reordering")
         model <- model[colnames(nhoodCounts(x)[keep.nh, keep.samps]), ]
-    }
-
-    if(length(norm.method) > 1){
+      }
+      if(length(norm.method) > 1){
         message("Using TMM normalisation")
         dge <- DGEList(counts=nhoodCounts(x)[keep.nh, keep.samps],
                        lib.size=colSums(nhoodCounts(x)[keep.nh, keep.samps]))
         dge <- calcNormFactors(dge, method="TMM")
-    } else if(norm.method %in% c("TMM")){
+      } else if(norm.method %in% c("TMM")){
         message("Using TMM normalisation")
         dge <- DGEList(counts=nhoodCounts(x)[keep.nh, keep.samps],
                        lib.size=colSums(nhoodCounts(x)[keep.nh, keep.samps]))
         dge <- calcNormFactors(dge, method="TMM")
-    } else if(norm.method %in% c("RLE")){
+      } else if(norm.method %in% c("RLE")){
         message("Using RLE normalisation")
         dge <- DGEList(counts=nhoodCounts(x)[keep.nh, keep.samps],
                        lib.size=colSums(nhoodCounts(x)[keep.nh, keep.samps]))
         dge <- calcNormFactors(dge, method="RLE")
-    }else if(norm.method %in% c("logMS")){
+      }else if(norm.method %in% c("logMS")){
         message("Using logMS normalisation")
         dge <- DGEList(counts=nhoodCounts(x)[keep.nh, keep.samps],
                        lib.size=colSums(nhoodCounts(x)[keep.nh, keep.samps]))
+      }
+    }
+  
+    if (is(x, 'Seurat')) {
+      if (!'nhoodCounts' %in% names(x@neighbors[[graph_name]])) {
+        stop("Neighbourhood counts missing - please run countCells first")
+      }
+      if (!reduced.dim %in% names(object@reductions)) {
+        sprintf("%s not found in object@reductions slot. Please run PCA firstly or specify the correct slot name.", reduced.dim)
+      }
+      if(ncol(object@neighbors[[graph_name]]$nhoodCounts) != nrow(model)){
+        # need to allow for design.df with a subset of samples only
+        if(all(rownames(model) %in% colnames(object@neighbors[[graph_name]]$nhoodCounts))){
+          message("Design matrix is a strict subset of the nhood counts")
+          subset.counts <- TRUE
+        } else{
+          stop("Design matrix (", nrow(model), ") and nhood counts (",
+               ncol(nhoodCounts(x)), ") are not the same dimension")
+        }
+      }
+      if(min.mean > 0){
+        if(isTRUE(subset.counts)){
+          keep.nh <- rowMeans(x@neighbors[[graph_name]]$nhoodCounts[, rownames(model)]) >= min.mean
+        } else{
+          keep.nh <- rowMeans(x@neighbors[[graph_name]]$nhoodCounts) >= min.mean
+        }
+      } else{
+        if(isTRUE(subset.counts)){
+          keep.nh <- rep(TRUE, nrow(x@neighbors[[graph_name]]$nhoodCounts[, rownames(model)]))
+        }else{
+          keep.nh <- rep(TRUE, nrow(x@neighbors[[graph_name]]$nhoodCounts))
+        }
+      }
+      if(isTRUE(subset.counts)){
+        keep.samps <- intersect(rownames(model), colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, ]))
+      } else{
+        keep.samps <- colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, ])
+      }
+      if(any(colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]) != rownames(model)) & !any(colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]) %in% rownames(model))){
+        stop("Sample names in design matrix and nhood counts are not matched.
+             Set appropriate rownames in design matrix.")
+      } else if(any(colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]) != rownames(model)) & any(colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]) %in% rownames(model))){
+        warning("Sample names in design matrix and nhood counts are not matched. Reordering")
+        model <- model[colnames(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]), ]
+      }
+      if(length(norm.method) > 1){
+        message("Using TMM normalisation")
+        dge <- DGEList(counts=x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps],
+                       lib.size=colSums(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]))
+        dge <- calcNormFactors(dge, method="TMM")
+      } else if(norm.method %in% c("TMM")){
+        message("Using TMM normalisation")
+        dge <- DGEList(counts=x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps],
+                       lib.size=colSums(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]))
+        dge <- calcNormFactors(dge, method="TMM")
+      } else if(norm.method %in% c("RLE")){
+        message("Using RLE normalisation")
+        dge <- DGEList(counts=x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps],
+                       lib.size=colSums(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]))
+        dge <- calcNormFactors(dge, method="RLE")
+      }else if(norm.method %in% c("logMS")){
+        message("Using logMS normalisation")
+        dge <- DGEList(counts=x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps],
+                       lib.size=colSums(x@neighbors[[graph_name]]$nhoodCounts[keep.nh, keep.samps]))
+      }
     }
 
     dge <- estimateDisp(dge, model)
@@ -218,14 +277,26 @@ testNhoods <- function(x, design, design.df,
 
     res$Nhood <- as.numeric(rownames(res))
     message("Performing spatial FDR correction with", fdr.weighting[1], " weighting")
-    mod.spatialfdr <- graphSpatialFDR(x.nhoods=nhoods(x),
-                                      graph=graph(x),
-                                      weighting=fdr.weighting,
-                                      k=x@.k,
-                                      pvalues=res[order(res$Nhood), ]$PValue,
-                                      indices=nhoodIndex(x),
-                                      distances=nhoodDistances(x),
-                                      reduced.dimensions=reducedDim(x, reduced.dim))
+    if (is(x, 'Milo')) {
+      mod.spatialfdr <- graphSpatialFDR(x.nhoods=nhoods(x),
+                                        graph=graph(x),
+                                        weighting=fdr.weighting,
+                                        k=x@.k,
+                                        pvalues=res[order(res$Nhood), ]$PValue,
+                                        indices=nhoodIndex(x),
+                                        distances=nhoodDistances(x),
+                                        reduced.dimensions=reducedDim(x, reduced.dim))
+    }
+    if (is(x, 'Seurat')) {
+      mod.spatialfdr <- graphSpatialFDR(x.nhoods=x@neighbors[[graph_name]]$nhoods,
+                                        graph=x@graphs[[graph_name]][[1]],
+                                        weighting=fdr.weighting,
+                                        k=x@commands$`MiloR::buildGraph`$k,
+                                        pvalues=res[order(res$Nhood), ]$PValue,
+                                        indices=x@neighbors[[graph_name]]$nhoodIndex,
+                                        distances=x@neighbors[[graph_name]]$nhoodDistances,
+                                        reduced.dimensions=x@reductions[[reduced.dim]]@cell.embeddings)
+    }
 
     res$SpatialFDR[order(res$Nhood)] <- mod.spatialfdr
     res

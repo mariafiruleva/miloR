@@ -62,7 +62,8 @@ NULL
 #' @importFrom BiocNeighbors KmknnParam
 buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
                        reduced.dim="PCA", BNPARAM=KmknnParam(),
-                       BSPARAM=bsparam(), BPPARAM=SerialParam()){
+                       BSPARAM=bsparam(), BPPARAM=SerialParam(),
+                       graph_name='miloR'){
 
     # check class of x to determine which function to call
     # in all cases it must return a Milo object with the graph slot populated
@@ -78,7 +79,6 @@ buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
                                   scale.=TRUE, center=TRUE)
             reducedDim(x, "PCA") <- x_pca$x
             attr(reducedDim(x, "PCA"), "rotation") <-  x_pca$rotation
-            reduced.dim <- "PCA"
         } else if(!any(reducedDimNames(x) %in% c(reduced.dim))){
             # assume logcounts is present?
             message("Computing PCA - name not in slot")
@@ -86,7 +86,6 @@ buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
                                   scale.=TRUE, center=TRUE)
             reducedDim(x, "PCA") <- x_pca$x
             attr(reducedDim(x, "PCA"), "rotation") <-  x_pca$rotation
-            reduced.dim <- "PCA"
         }
     } else if(is.matrix(x) & isTRUE(transposed)){
         # assume input are PCs - the expression data is non-sensical here
@@ -112,14 +111,18 @@ buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
                                   scale.=TRUE, center=TRUE)
             reducedDim(x, "PCA") <- x_pca$x
             attr(reducedDim(x, "PCA"), "rotation") <-  x_pca$rotation
-            reduced.dim <- "PCA"
         }
 
         x <- Milo(x)
+    } else if (is(x, "Seurat")){
+      if(!reduced.dim %in% Reductions(x)){
+        message(sprintf("Please run PCA before miloR execution.
+                        Dimensions available now are: %s",
+                        Reductions(x)))
+      }
     }
-
     .buildGraph(x, k=k, d=d, get.distance=get.distance, reduced.dim=reduced.dim,
-                BNPARAM=BNPARAM, BSPARAM=BSPARAM, BPPARAM=BPPARAM)
+                BNPARAM=BNPARAM, BSPARAM=BSPARAM, BPPARAM=BPPARAM, graph_name=graph_name)
 }
 
 
@@ -128,11 +131,16 @@ buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
 #' @importFrom BiocParallel SerialParam
 #' @importFrom BiocNeighbors KmknnParam
 .buildGraph <- function(x, k=10, d=50, get.distance=FALSE,
-                        reduced.dim="PCA",
+                        reduced.dim="PCA", assay="RNA",
                         BNPARAM=KmknnParam(), BSPARAM=bsparam(),
-                        BPPARAM=SerialParam()){
-
-    nn.out <- .setup_knn_data(x=reducedDim(x, reduced.dim), d=d,
+                        BPPARAM=SerialParam(), graph_name=graph_name){
+    if (is(x, "Milo")) {
+      pca_projections <- reducedDim(x, reduced.dim)
+    } else if(is(x, "Seurat")){
+      pca_projections <- x@reductions[['pca']]@cell.embeddings
+    }
+    
+    nn.out <- .setup_knn_data(x=pca_projections, d=d,
                               k=k, BNPARAM=BNPARAM, BSPARAM=BSPARAM,
                               BPPARAM=BPPARAM)
 
@@ -140,10 +148,27 @@ buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
     # to the larger neighbourhood
     message("Constructing kNN graph with k:", k)
     zee.graph <- .neighborsToKNNGraph(nn.out$index, directed=FALSE)
-    graph(x) <- zee.graph
+    if (is(x, "Milo")) {
+      graph(x) <- zee.graph
+      x@.k <- k
+    } else if(is(x, "Seurat")){
+      x@graphs[[graph_name]] <- list(zee.graph)
+      command_meta_info <- new("SeuratCommand",
+                               name="MiloR::buildGraph",
+                               assay.used=assay,
+                               call.string="MiloR::buildGraph(object)",
+                               params=list(k=k,
+                                           d=d,
+                                           get.distance = get.distance,
+                                           dim=reduced.dim,
+                                           assay=assay,
+                                           graph_name=graph_name),
+                               time.stamp=as.POSIXct(Sys.time()))
+      x@commands[['MiloR::buildGraph']] <- command_meta_info
+    }
 
     # adding distances
-    if(isTRUE(get.distance)){
+    if(isTRUE(get.distance) & is(x, "Milo")){
         message("Retrieving distances from ", k, " nearest neighbours")
         # set this up as a dense matrix first, then coerce to a sparse matrix
         # starting with a sparse matrix requires a coercion at each iteration
@@ -160,7 +185,6 @@ buildGraph <- function(x, k=10, d=50, transposed=FALSE, get.distance=FALSE,
         old.dist <- as(old.dist, "dgCMatrix")
         nhoodDistances(x) <- old.dist
     }
-    x@.k <- k
     x
 }
 

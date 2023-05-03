@@ -53,14 +53,14 @@
 #' @importFrom BiocNeighbors findKNN
 #' @importFrom igraph neighbors neighborhood as_ids V
 #' @importFrom stats setNames
-makeNhoods <- function(x, prop=0.1, k=21, d=30, refined=TRUE, reduced_dims="PCA", refinement_scheme = "reduced_dim") {
+makeNhoods <- function(x, prop=0.1, k=21, d=30, refined=TRUE, reduced_dims="PCA", refinement_scheme = "reduced_dim", graph_name='miloR', assay='RNA') {
     if(is(x, "Milo")){
         message("Checking valid object")
         # check that a graph has been built
         if(!.valid_graph(graph(x))){
             stop("Not a valid Milo object - graph is missing. Please run buildGraph() first.")
         }
-        graph <- graph(x)
+        graph <- traj_milo@graph$graph
 
         if(isTRUE(refined) & refinement_scheme == "reduced_dim"){
             X_reduced_dims  <- reducedDim(x, reduced_dims)
@@ -96,6 +96,26 @@ makeNhoods <- function(x, prop=0.1, k=21, d=30, refined=TRUE, reduced_dims="PCA"
             warning("Ignoring reduced dimensions matrix because refinement_scheme = graph was selected.")
         }
 
+    } else if(is(x, "Seurat")){
+      if(!.valid_graph(x@graphs[[graph_name]][[1]])){
+        stop("Graph is missing. Please run buildGraph() first.")
+      }
+      graph <- x@graphs[[graph_name]][[1]]
+      
+      if(isTRUE(refined) & refinement_scheme == "reduced_dim"){
+        X_reduced_dims  <- x@reductions[[reduced_dims]]@cell.embeddings
+        if (d > ncol(X_reduced_dims)) {
+          warning("Specified d is higher than the total number of dimensions in reducedDim(x, reduced_dims).
+                        Falling back to using",ncol(X_reduced_dims),"dimensions\n")
+          d <- ncol(X_reduced_dims)
+        }
+        X_reduced_dims  <- X_reduced_dims[,seq_len(d)]
+        mat_cols <- ncol(x)
+        match.ids <- all(rownames(X_reduced_dims) == colnames(x))
+        if(!match.ids){
+          stop("Rownames of reduced dimensions do not match cell IDs")
+        }
+      }
     } else{
         stop("Data format: ", class(x), " not recognised. Should be Milo or igraph.")
     }
@@ -118,7 +138,7 @@ makeNhoods <- function(x, prop=0.1, k=21, d=30, refined=TRUE, reduced_dims="PCA"
 
     sampled_vertices <- unique(sampled_vertices)
 
-    if(is(x, "Milo")){
+    if(is(x, "Milo") || is(x, "Seurat")){
         nh_mat <- Matrix(data = 0, nrow=ncol(x), ncol=length(sampled_vertices), sparse = TRUE)
     } else if(is(x, "igraph")){
         nh_mat <- Matrix(data = 0, nrow=length(V(x)), ncol=length(sampled_vertices), sparse = TRUE)
@@ -127,7 +147,7 @@ makeNhoods <- function(x, prop=0.1, k=21, d=30, refined=TRUE, reduced_dims="PCA"
     # if vertex names are set (as can happen with graphs from 3rd party tools), then set rownames of nh_mat
     v.class <- V(graph)$name
 
-    if(is(x, "Milo")){
+    if(is(x, "Milo") || is(x, "Seurat")){
         rownames(nh_mat) <- colnames(x)
     } else if(is(x, "igraph")){
         if(is.null(v.class) & refinement_scheme == "reduced_dim"){
@@ -143,10 +163,28 @@ makeNhoods <- function(x, prop=0.1, k=21, d=30, refined=TRUE, reduced_dims="PCA"
 
     # need to add the index cells.
     colnames(nh_mat) <- as.character(sampled_vertices)
-    if(is(x, "Milo")){
+    if(is(x, "Milo")){ # TODO add required results to seurat obj -- need to create an additional slot?
         nhoodIndex(x) <- as(sampled_vertices, "list")
         nhoods(x) <- nh_mat
         return(x)
+    } else if (is(x, "Seurat")){
+      command_meta_info <- new("SeuratCommand",
+                               name="MiloR::makeNhoods",
+                               assay.used=assay,
+                               call.string="MiloR::makeNhoods(object)",
+                               params=list(prop=prop,
+                                           k=k,
+                                           d=d,
+                                           refined=refined,
+                                           dim=reduced_dims,
+                                           refinement_scheme=refinement_scheme,
+                                           graph_name=graph_name,
+                                           assay=assay),
+                               time.stamp=as.POSIXct(Sys.time()))
+      x@neighbors[[graph_name]] <- list('nhoodIndex' = as(sampled_vertices, "list"),
+                                        'nhoods' = nh_mat)
+      x@commands[['MiloR::makeNhoods']] <- command_meta_info
+      return(x)
     } else {
         return(nh_mat)
     }

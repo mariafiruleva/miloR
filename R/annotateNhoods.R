@@ -34,21 +34,32 @@
 #'
 #' @export
 #' @rdname annotateNhoods
-annotateNhoods <- function(x, da.res, coldata_col){
-  if(!is(x, "Milo")){
-    stop("Unrecognised input type - must be of class Milo")
+annotateNhoods <- function(x, da.res, coldata_col, graph_name='miloR'){
+  
+  if(!(is(x, "Milo") || is(x, 'Seurat'))){
+    stop("Not a valid object. Class should be Milo or Seurat")
+  }
+  
+  if(is(x, "Milo")){
+    if(!coldata_col %in% names(colData(x))){
+      stop(coldata_col, " is not a column in colData(x)")
+    }
+    
+    if(ncol(nhoods(x)) != nrow(da.res)){
+      stop("the number of rows in da.res does not match the number of neighbourhoods in nhoods(x). Are you sure da.res is the output of testNhoods(x)?")
+    }
+    anno_vec <- colData(x)[[coldata_col]]
+  }
+  if (is(x, 'Seurat')) {
+    if(!coldata_col %in% colnames(x@meta.data)){
+      stop(coldata_col, " is not a column in colnames(seurat_object@meta.data)")
+    }
+    if(ncol(x@neighbors[[graph_name]]$nhoods) != nrow(da.res)){
+      stop("the number of rows in da.res does not match the number of neighbourhoods in nhoods(x). Are you sure da.res is the output of testNhoods(x)?")
+    }
+    anno_vec <- x@meta.data[[coldata_col]]
   }
 
-  if(!coldata_col %in% names(colData(x))){
-    stop(coldata_col, " is not a column in colData(x)")
-  }
-
-  if(ncol(nhoods(x)) != nrow(da.res)){
-    stop("the number of rows in da.res does not match the number of neighbourhoods in nhoods(x). Are you sure da.res is the output of testNhoods(x)?")
-  }
-
-
-  anno_vec <- colData(x)[[coldata_col]]
   if (!is.factor(anno_vec)) {
     message("Converting ", coldata_col, " to factor...")
     anno_vec <- factor(anno_vec, levels=unique(anno_vec))
@@ -56,10 +67,19 @@ annotateNhoods <- function(x, da.res, coldata_col){
 
   ## Count occurrence of labels in each nhood
   n.levels <- length(levels(anno_vec))
-  nhood_counts <- vapply(seq_len(ncol(nhoods(x))), FUN=function(n) table(anno_vec[which(nhoods(x)[,n]==1)]),
-                         FUN.VALUE=numeric(n.levels))
+  
+  if (is(x, 'Milo')) {
+    nhood_counts <- vapply(seq_len(ncol(nhoods(x))), FUN=function(n) table(anno_vec[which(nhoods(x)[,n]==1)]),
+                           FUN.VALUE=numeric(n.levels))
+    colnames(nhood_counts) <- seq_len(ncol(nhoods(x)))
+  }
+  if (is(x, 'Seurat')) {
+    nhood_counts <- vapply(seq_len(ncol(x@neighbors[[graph_name]]$nhoods)), FUN=function(n) table(anno_vec[which(x@neighbors[[graph_name]]$nhoods[,n]==1)]),
+                           FUN.VALUE=numeric(n.levels))
+    colnames(nhood_counts) <- seq_len(ncol(x@neighbors[[graph_name]]$nhoods))
+  }
+  
   nhood_counts <- t(nhood_counts)
-  rownames(nhood_counts) <- seq_len(ncol(nhoods(x)))
 
   ## Fetch the most frequent label
   max_val <- apply(nhood_counts, 1, function(x) colnames(nhood_counts)[which.max(x)])

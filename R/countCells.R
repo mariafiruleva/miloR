@@ -45,7 +45,7 @@ NULL
 #' @rdname countCells
 #' @importFrom Matrix Matrix
 #' @importClassesFrom S4Vectors DataFrame
-countCells <- function(x, samples, meta.data=NULL){
+countCells <- function(x, samples, meta.data=NULL, graph_name='miloR', assay='RNA'){
 
     # cast dplyr objects to data.frame
     if(!is.data.frame(meta.data) & !is.null(meta.data)){
@@ -60,8 +60,17 @@ countCells <- function(x, samples, meta.data=NULL){
     }
 
     # check the nhoods slot is populated
-    if(ncol(nhoods(x)) == 1 & nrow(nhoods(x)) == 1){
+    if(is(x, 'Milo')){
+      if (ncol(nhoods(x)) == 1 & nrow(nhoods(x)) == 1) {
         stop("No neighbourhoods found. Please run makeNhoods() first.")
+      }
+    }
+    
+    if(is(x, 'Seurat')){
+      if (!graph_name %in% names(x@neighbors)) {
+        stop(sprintf("%s slot not found in seurat_object@neighbors. Please run makeNhoods() first or specify the right graph_name.",
+                     graph_name))
+      }
     }
 
     message("Checking meta.data validity")
@@ -78,8 +87,12 @@ countCells <- function(x, samples, meta.data=NULL){
             samp.ids <- unique(as.character(samples))
         }
     }
-
-    num.hoods <- ncol(nhoods(x))
+    if (is(x, 'Milo')) {
+      num.hoods <- ncol(nhoods(x))
+    }
+    if (is(x, 'Seurat')) {
+      num.hoods <- ncol(x@neighbors[[graph_name]]$nhoods)
+    }
 
     ## Convert meta data to binary dummies in sparse matrix
     dummy.meta.data <- Matrix(data=0, nrow=nrow(meta.data), ncol = length(samp.ids), sparse = TRUE)
@@ -92,11 +105,30 @@ countCells <- function(x, samples, meta.data=NULL){
     }
 
     message("Counting cells in neighbourhoods")
-    count.matrix <- Matrix::t(nhoods(x)) %*% dummy.meta.data
+    if (is(x, 'Milo')) {
+      count.matrix <- Matrix::t(nhoods(x)) %*% dummy.meta.data
+    }
+    if (is(x, 'Seurat')) {
+      count.matrix <- Matrix::t(x@neighbors[[graph_name]]$nhoods) %*% dummy.meta.data
+    }
 
     # add to the object
     rownames(count.matrix) <- seq_len(num.hoods)
-    nhoodCounts(x) <- count.matrix
-
+    
+    if (is(x, 'Milo')) {
+      nhoodCounts(x) <- count.matrix
+    }
+    if (is(x, 'Seurat')) {
+      x@neighbors[[graph_name]][['nhoodCounts']] <- count.matrix
+      command_meta_info <- new("SeuratCommand",
+                               name="MiloR::countCells",
+                               assay.used=assay,
+                               call.string="MiloR::countCells(object)",
+                               params=list(samples=samples,
+                                           graph_name=graph_name,
+                                           assay=assay),
+                               time.stamp=as.POSIXct(Sys.time()))
+      x@commands[['MiloR::countCells']] <- command_meta_info
+    }
     return(x)
 }

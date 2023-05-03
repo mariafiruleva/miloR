@@ -13,7 +13,7 @@
 #' @param reduced.dim If x is an \code{\linkS4class{Milo}} object, a character indicating the name of the \code{reducedDim} slot in the
 #' \code{\linkS4class{Milo}} object to use as (default: 'PCA'). Otherwise this should be an N X P matrix with rows in the same order as the
 #' columns of the input Milo object \code{x}.
-#' @param use.assay A character scalar defining which \code{assay} slot in the
+#' @param slot A character scalar defining which \code{assay} slot in the
 #' \code{\linkS4class{Milo}} to use
 #'
 #' @return A \code{\linkS4class{Milo}} object with the distance slots populated.
@@ -42,51 +42,76 @@
 #' @importFrom irlba prcomp_irlba
 #' @importFrom SummarizedExperiment assay
 #' @importFrom Matrix which
-calcNhoodDistance <- function(x, d, reduced.dim=NULL, use.assay="logcounts"){
+calcNhoodDistance <- function(x, d, reduced.dim=NULL, used.assay='RNA', slot="logcounts", graph_name='miloR'){
     if(is(x, "Milo")){
         # check for reducedDims
         if((length(reducedDimNames(x)) == 0) & is.null(reduced.dim)){
             # assume logcounts is present?
             message("Computing PCA on input")
-            x_pca <- prcomp_irlba(t(assay(x, use.assay)), n=min(d+1, ncol(x)-1),
+            x_pca <- prcomp_irlba(t(assay(x, slot)), n=min(d+1, ncol(x)-1),
                                   scale.=TRUE, center=TRUE)
             reducedDim(x, "PCA") <- x_pca$x
         } else if((length(reducedDimNames(x)) == 0) & is.character(reduced.dim)){
             stop(reduced.dim, " not found in reducedDim slot")
         }
-    } else{
-        stop("Input is not a valid Milo object")
+    } else if(is(x, "Seurat")){
+      # check for reducedDims
+      if(!reduced.dim %in% names(x@reductions)){
+        stop(sprintf("%s not found in object@reductions slot. Please run PCA firstly or specify the correct slot name.", reduced.dim))
+      }
+    }else{
+        stop("Input is not a valid object (should be Milo or Seurat class)")
     }
-
-    non.zero.nhoods <- which(nhoods(x)!=0, arr.ind = TRUE)
-
-    if(is.character(reduced.dim)){
+  
+    if (is(x, 'Milo')) {
+      non.zero.nhoods <- which(nhoods(x)!=0, arr.ind = TRUE)
+      
+      if(is.character(reduced.dim)){
         # check if it exists in the slot
         if(!any(names(reducedDims(x)) %in% reduced.dim)){
-            stop(reduced.dim, " not found in the reducedDim slot")
+          stop(reduced.dim, " not found in the reducedDim slot")
         }
         nhood.dists <- sapply(seq_len(ncol(nhoods(x))),
                               function(X) .calc_distance(reducedDim(x, reduced.dim)[non.zero.nhoods[non.zero.nhoods[,'col']==X,'row'],
                                                                                     seq_len(d),drop=FALSE]))
         names(nhood.dists) <- nhoodIndex(x)
-    } else if(is(reduced.dim, "matrix")){
+      } else if(is(reduced.dim, "matrix")){
         nhood.dists <- sapply(seq_len(ncol(nhoods(x))),
                               function(X) .calc_distance(reduced.dim[non.zero.nhoods[non.zero.nhoods[,'col']==X,'row'],
                                                                      seq_len(d),drop=FALSE]))
-    } else if(is.null(reduced.dim)){
+      } else if(is.null(reduced.dim)){
         if(any(names(reducedDims(x)) %in% c("PCA"))){
-            nhood.dists <- sapply(seq_len(ncol(nhoods(x))),
-                                  function(X) .calc_distance(reducedDim(x, "PCA")[non.zero.nhoods[non.zero.nhoods[,'col']==X,'row'],
-                                                                                  seq_len(d),drop=FALSE]))
-            names(nhood.dists) <- nhoodIndex(x)
-
+          nhood.dists <- sapply(seq_len(ncol(nhoods(x))),
+                                function(X) .calc_distance(reducedDim(x, "PCA")[non.zero.nhoods[non.zero.nhoods[,'col']==X,'row'],
+                                                                                seq_len(d),drop=FALSE]))
+          names(nhood.dists) <- nhoodIndex(x)
+          
         } else{
-            stop("No reduced.dim slot specified")
+          stop("No reduced.dim slot specified")
         }
+      }
+      nhoodDistances(x) <- nhood.dists
     }
-
-    nhoodDistances(x) <- nhood.dists
-
+    if (is(x, 'Seurat')) {
+      non.zero.nhoods <- which(x@neighbors[[graph_name]]$nhoods != 0, arr.ind = TRUE)
+      num.hoods <- ncol(x@neighbors[[graph_name]]$nhoods)
+      nhood.dists <- sapply(seq_len(num.hoods),
+                            function(X) .calc_distance(x@reductions[[reduced.dim]]@cell.embeddings[non.zero.nhoods[non.zero.nhoods[,'col']==X,'row'],
+                                                                                  seq_len(d),drop=FALSE]))
+      names(nhood.dists) <- x@neighbors[[graph_name]]$nhoodIndex
+      
+      x@neighbors[[graph_name]][['nhoodDistances']] <- nhood.dists
+      command_meta_info <- new("SeuratCommand",
+                               name="MiloR::calcNhoodDistance",
+                               assay.used=used.assay,
+                               call.string="MiloR::calcNhoodDistance(object)",
+                               params=list(d=d,
+                                           graph_name=graph_name,
+                                           dim=reduced.dim,
+                                           assay=used.assay),
+                               time.stamp=as.POSIXct(Sys.time()))
+      x@commands[['MiloR::calcNhoodDistance']] <- command_meta_info
+    }
     return(x)
 }
 

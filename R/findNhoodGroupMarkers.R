@@ -7,12 +7,13 @@
 #' aggregated groups are compared. For differential gene experession based on an input design
 #' \emph{within} DA neighbourhoods see \code{\link{testDiffExp}}.
 #'
-#' @param x A \code{\linkS4class{Milo}} object containing single-cell gene expression
+#' @param x A \code{\linkS4class{Milo}} or \code{\linkS4class{Seurat}} object containing single-cell gene expression
 #' and neighbourhoods.
 #' @param da.res A \code{data.frame} containing DA results, as expected from running
 #' \code{testNhoods}, as a \code{NhoodGroup} column specifying the grouping of neighbourhoods,
 #' as expected from
-##' @param assay A character scalar determining which \code{assays} slot to extract from the
+#' @param assay A character scalar determining which \code{assays} assay to extract from the (RNA / SCT / integrated -- required for Seurat)
+#' @param slot A character scalar determining which \code{assays} slot to extract from the (raw counts, log counts -- in case of Seurat, counts / data / scale.data)
 #' \code{\linkS4class{Milo}} object to use for DGE testing.
 #' @param aggregate.samples logical indicating wheather the expression values for cells in the same sample
 #' and neighbourhood group should be merged for DGE testing. This allows to perform testing exploiting the replication structure
@@ -57,16 +58,31 @@
 #' @export
 #' @importFrom stats model.matrix as.formula
 #' @importFrom Matrix colSums rowSums
-findNhoodGroupMarkers <- function(x, da.res, assay="logcounts",
+findNhoodGroupMarkers <- function(x, da.res, assay='RNA', slot="logcounts",
                              aggregate.samples=FALSE, sample_col=NULL,
                              subset.row=NULL, gene.offset=TRUE,
                              subset.nhoods=NULL, subset.groups=NULL,
-                             na.function="na.pass"){
+                             na.function="na.pass", graph_name='miloR'){
+  
+  if(!(is(x, "Milo") || is(x, 'Seurat'))){
+    stop("Not a valid object. Class should be Milo or Seurat")
+  }
 
-  if(!is(x, "Milo")){
-    stop("Unrecognised input type - must be of class Milo")
-  } else if(any(!assay %in% assayNames(x))){
-    stop("Unrecognised assay slot: ", assay)
+  if(is(x, "Milo")){
+    if(any(!slot %in% slotNames(x))){
+      stop("Unrecognised slot slot: ", slot)
+    }
+    # get the nhoods
+    nhs <- nhoods(x)
+  }
+  if (is(x, 'Seurat')) {
+    tryCatch({
+      is(slot(x@assays[[assay]], slot), 'Matrix')
+    }, error=function(err){
+      stop(sprintf('There is no slot %s in assay %s. Please check seurat_object@assays', assay, slot))
+    }, finally={
+    })
+    nhs <- x@neighbors[[graph_name]]$nhoods
   }
 
   if(is.null(na.function)){
@@ -100,8 +116,6 @@ findNhoodGroupMarkers <- function(x, da.res, assay="logcounts",
 
   nhood.gr <- unique(nhs.da.gr)
 
-  # get the nhoods
-  nhs <- nhoods(x)
   if(!is.null(subset.nhoods)){
     nhs <- nhs[,subset.nhoods]
     # ## Remove cells out of neighbourhoods of interest
@@ -137,8 +151,14 @@ findNhoodGroupMarkers <- function(x, da.res, assay="logcounts",
   if(!is.null(subset.row)){
     x <- x[subset.row, , drop=FALSE]
   }
+  
+  if (is(x, 'Milo')) {
+    exprs <- slot(x, slot)[,fake.meta$CellID]
+  }
+  if (is(x, 'Seurat')) {
+    exprs <- slot(x@assays[[assay]], slot)[,fake.meta$CellID]
+  }
 
-  exprs <- assay(x, assay)[,fake.meta$CellID]
 
   marker.list <- list()
   i.contrast <- c("TestTest - TestRef") # always use contrasts for this
@@ -155,7 +175,11 @@ findNhoodGroupMarkers <- function(x, da.res, assay="logcounts",
   ## Aggregate expression by sample
   # To avoid treating cells as independent replicates
   if (isTRUE(aggregate.samples)) {
-    fake.meta[,"sample_id"] <- colData(x)[fake.meta$CellID,sample_col]
+    if (is(x, 'Milo')) {
+      fake.meta[,"sample_id"] <- colData(x)[fake.meta$CellID,sample_col]
+    } else{
+      fake.meta[,"sample_id"] <- x@meta.data[fake.meta$CellID,sample_col]
+    }
     fake.meta[,'sample_group'] <- paste(fake.meta[,"sample_id"], fake.meta[,"Nhood.Group"], sep="_")
 
     sample_gr_mat <- matrix(0, nrow=nrow(fake.meta), ncol=length(unique(fake.meta$sample_group)))
@@ -168,7 +192,7 @@ findNhoodGroupMarkers <- function(x, da.res, assay="logcounts",
 
     ## Summarise expression by sample
     exprs_smp <- matrix(0, nrow=nrow(exprs), ncol=ncol(sample_gr_mat))
-    if (assay=='counts') {
+    if (slot=='counts') {
       summFunc <- rowSums
     } else {
       summFunc <- rowMeans
@@ -208,15 +232,15 @@ findNhoodGroupMarkers <- function(x, da.res, assay="logcounts",
       rownames(i.model) <- rownames(i.meta)
     }
 
-    if(assay == "logcounts"){
+    if(slot == "logcounts" || slot == "data"){
       i.res <- .perform_lognormal_dge(exprs, i.model, model.contrasts=i.contrast,
                                       gene.offset=gene.offset)
-    } else if(assay == "counts"){
+    } else if(slot == "counts"){
       i.res <- .perform_counts_dge(exprs, i.model, model.contrasts=i.contrast,
                                    gene.offset=gene.offset)
       colnames(i.res)[ncol(i.res)] <- "adj.P.Val"
     } else{
-      warning("Assay type is not counts or logcounts - assuming (log)-normal distribution. Use these results at your peril")
+      warning("slot type is not counts or logcounts - assuming (log)-normal distribution. Use these results at your peril")
       i.res <- .perform_lognormal_dge(exprs, i.model,
                                       model.contrasts=i.contrast,
                                       gene.offset=gene.offset)
